@@ -1,0 +1,6 @@
+# Data files
+data/
+*.csv
+
+# Python cache
+eda/__pycache__/

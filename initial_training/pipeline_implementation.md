@@ -10,7 +10,7 @@ This file is separate from the EDA pipeline. Do not merge them. The aggregation 
 
 The project must be organized as follows before any code is written. Create any missing files or directories.
 
-```
+```text
 home_credit_risk/
 ├── data/
 │   ├── application_train.csv
@@ -86,6 +86,7 @@ import shap
 ### Step 2: Column drop list
 
 Before writing any code, open `eda/eda_report.pdf` and locate the two output summary sections:
+
 - Section 6 — Phase 1 output summary: contains the drop list from the `application_train` EDA, covering columns with over 60% null rates and columns identified as redundant from high-correlation pairs
 - Section 11 — Phase 3 output summary: contains the drop list from the joined dataset EDA, covering cross-table features that did not outperform their components and any additional redundant aggregated columns
 
@@ -321,6 +322,7 @@ print(classification_report(target_test, predicted_labels, target_names=['Repays
 ```
 
 **ROC curve:**
+
 ```python
 fig, ax = plt.subplots(figsize=(8, 6))
 RocCurveDisplay.from_predictions(target_test, predicted_probabilities, ax=ax)
@@ -334,6 +336,7 @@ print(f"Saved: {os.path.join(REPORTS_DIR, 'roc_curve.png')}")
 ```
 
 **Confusion matrix:**
+
 ```python
 confusion_mat = confusion_matrix(target_test, predicted_labels)
 fig, ax = plt.subplots(figsize=(6, 5))
@@ -352,6 +355,7 @@ print(f"Saved: {os.path.join(REPORTS_DIR, 'confusion_matrix.png')}")
 ```
 
 Print a performance interpretation after saving the plots:
+
 - If `roc_auc` >= 0.80: print "Strong result — above 0.80 AUC. Check for data leakage before considering this final."
 - If `roc_auc` >= 0.77 and < 0.80: print "Good result — in the expected range for this dataset with supplementary features."
 - If `roc_auc` >= 0.74 and < 0.77: print "Moderate result — in the expected range for application_train features only. Check that supplementary table features are present."
@@ -370,6 +374,7 @@ shap_values = shap_explainer.shap_values(shap_sample)
 ```
 
 **SHAP summary plot (beeswarm):**
+
 ```python
 plt.figure()
 shap.summary_plot(
@@ -385,6 +390,7 @@ print(f"Saved: {os.path.join(REPORTS_DIR, 'shap_summary.png')}")
 ```
 
 **SHAP bar plot (mean absolute value):**
+
 ```python
 plt.figure()
 shap.summary_plot(
@@ -419,7 +425,7 @@ print(shap_pruning_candidates.to_string())
 
 At the end of the script, print a consolidated summary of all key outputs:
 
-```
+```text
 ========================================
 PIPELINE SUMMARY
 ========================================

@@ -6,3 +6,10 @@ data/
 eda/__pycache__/
 initial_training/__pycache__/
 lib/__pycache__/
+
+# Model files
+*.json
+
+# MLflow DB files
+*.db
+mlruns/

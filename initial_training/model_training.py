@@ -23,6 +23,8 @@ from xgboost import XGBClassifier
 from lib.data_aggregation import preprocess, aggregate_all
 
 import matplotlib.pyplot as plt
+import mlflow
+import mlflow.xgboost
 import numpy as np
 import pandas as pd
 import seaborn as sns
@@ -286,158 +288,214 @@ assert features_test.isnull().sum().sum() == 0, "Nulls remain in features_test a
 print("Imputation complete. No nulls remain.")
 
 
-# ── Step 9: Compute scale_pos_weight ──────────────────────────────────────────
+# ── Step 9: Compute scale_pos_weight and start MLflow run ─────────────────────
 
-negative_class_count = (target_train == 0).sum()
-positive_class_count = (target_train == 1).sum()
-scale_pos_weight = negative_class_count / positive_class_count
-print(f"Training set — negative class: {negative_class_count}, positive class: {positive_class_count}")
-print(f"scale_pos_weight: {scale_pos_weight:.4f}")
+MLFLOW_DB = os.path.join(os.path.dirname(__file__), '..', 'mlflow.db')
+mlflow.set_tracking_uri(f"sqlite:///{os.path.abspath(MLFLOW_DB)}")
+mlflow.set_experiment("home-credit-xgboost")
 
+with mlflow.start_run():
 
-# ── Step 10: Train XGBoost ────────────────────────────────────────────────────
+    negative_class_count = (target_train == 0).sum()
+    positive_class_count = (target_train == 1).sum()
+    scale_pos_weight = negative_class_count / positive_class_count
+    print(f"Training set — negative class: {negative_class_count}, positive class: {positive_class_count}")
+    print(f"scale_pos_weight: {scale_pos_weight:.4f}")
 
-print("Training XGBoost model...")
-xgb_model = XGBClassifier(
-    n_estimators=500,
-    learning_rate=0.05,
-    max_depth=6,
-    subsample=0.8,
-    colsample_bytree=0.8,
-    scale_pos_weight=scale_pos_weight,
-    eval_metric='auc',
-    early_stopping_rounds=50,
-    random_state=42,
-    n_jobs=-1
-)
+    N_ESTIMATORS     = 500
+    LEARNING_RATE    = 0.05
+    MAX_DEPTH        = 6
+    SUBSAMPLE        = 0.8
+    COLSAMPLE_BYTREE = 0.8
+    RANDOM_STATE     = 42
 
-xgb_model.fit(
-    features_train, target_train,
-    eval_set=[(features_test, target_test)],
-    verbose=50
-)
-
-print(f"Best iteration: {xgb_model.best_iteration}")
-print(f"Best AUC on eval set: {xgb_model.best_score:.4f}")
+    mlflow.log_params({
+        "n_estimators":      N_ESTIMATORS,
+        "learning_rate":     LEARNING_RATE,
+        "max_depth":         MAX_DEPTH,
+        "subsample":         SUBSAMPLE,
+        "colsample_bytree":  COLSAMPLE_BYTREE,
+        "scale_pos_weight":  round(float(scale_pos_weight), 4),
+        "test_size":         0.2,
+        "random_state":      RANDOM_STATE,
+    })
 
 
-# ── Step 11: Evaluate ─────────────────────────────────────────────────────────
+    # ── Step 10: Train XGBoost ────────────────────────────────────────────────────
 
-REPORTS_DIR = os.path.join(os.path.dirname(__file__), 'reports')
-os.makedirs(REPORTS_DIR, exist_ok=True)
+    print("Training XGBoost model...")
+    xgb_model = XGBClassifier(
+        n_estimators=N_ESTIMATORS,
+        learning_rate=LEARNING_RATE,
+        max_depth=MAX_DEPTH,
+        subsample=SUBSAMPLE,
+        colsample_bytree=COLSAMPLE_BYTREE,
+        scale_pos_weight=scale_pos_weight,
+        eval_metric='auc',
+        early_stopping_rounds=50,
+        random_state=RANDOM_STATE,
+        n_jobs=-1
+    )
 
-predicted_probabilities = xgb_model.predict_proba(features_test)[:, 1]
-predicted_labels = xgb_model.predict(features_test)
+    xgb_model.fit(
+        features_train, target_train,
+        eval_set=[(features_test, target_test)],
+        verbose=50
+    )
 
-roc_auc = roc_auc_score(target_test, predicted_probabilities)
-print(f"\nROC-AUC: {roc_auc:.4f}")
-print("\nClassification Report:")
-print(classification_report(target_test, predicted_labels, target_names=['Repays', 'Defaults']))
-
-# ROC curve
-fig, ax = plt.subplots(figsize=(8, 6))
-RocCurveDisplay.from_predictions(target_test, predicted_probabilities, ax=ax)
-ax.set_title(f'ROC Curve (AUC = {roc_auc:.4f})', fontsize=14)
-ax.plot([0, 1], [0, 1], 'k--', label='Random classifier')
-ax.legend()
-plt.tight_layout()
-plt.savefig(os.path.join(REPORTS_DIR, 'roc_curve.png'), dpi=150)
-plt.close()
-print(f"Saved: {os.path.join(REPORTS_DIR, 'roc_curve.png')}")
-
-# Confusion matrix
-confusion_mat = confusion_matrix(target_test, predicted_labels)
-fig, ax = plt.subplots(figsize=(6, 5))
-sns.heatmap(
-    confusion_mat, annot=True, fmt='d', cmap='Blues', ax=ax,
-    xticklabels=['Repays', 'Defaults'],
-    yticklabels=['Repays', 'Defaults']
-)
-ax.set_xlabel('Predicted', fontsize=12)
-ax.set_ylabel('Actual', fontsize=12)
-ax.set_title('Confusion Matrix', fontsize=14)
-plt.tight_layout()
-plt.savefig(os.path.join(REPORTS_DIR, 'confusion_matrix.png'), dpi=150)
-plt.close()
-print(f"Saved: {os.path.join(REPORTS_DIR, 'confusion_matrix.png')}")
-
-# Performance interpretation
-if roc_auc >= 0.80:
-    print("Strong result — above 0.80 AUC. Check for data leakage before considering this final.")
-elif roc_auc >= 0.77:
-    print("Good result — in the expected range for this dataset with supplementary features.")
-elif roc_auc >= 0.74:
-    print("Moderate result — in the expected range for application_train features only. Check that supplementary table features are present.")
-else:
-    print("Below expected range — investigate aggregation bugs, dropped features, or imputation issues.")
+    print(f"Best iteration: {xgb_model.best_iteration}")
+    print(f"Best AUC on eval set: {xgb_model.best_score:.4f}")
+    mlflow.log_metric("best_iteration", xgb_model.best_iteration)
 
 
-# ── Step 12: SHAP feature importance ──────────────────────────────────────────
+    # ── Step 11: Evaluate ─────────────────────────────────────────────────────────
 
-print("Computing SHAP values...")
-shap_sample = features_test.sample(n=min(2000, len(features_test)), random_state=42)
+    REPORTS_DIR = os.path.join(os.path.dirname(__file__), 'reports')
+    os.makedirs(REPORTS_DIR, exist_ok=True)
+    xgb_model.save_model(os.path.join(REPORTS_DIR, 'xgb_model.json'))
+    print(f"Model saved: {os.path.join(REPORTS_DIR, 'xgb_model.json')}")
 
-shap_explainer = shap.TreeExplainer(xgb_model)
-shap_values = shap_explainer.shap_values(shap_sample)
+    predicted_probabilities = xgb_model.predict_proba(features_test)[:, 1]
+    predicted_labels = xgb_model.predict(features_test)
 
-# SHAP summary plot (beeswarm)
-plt.figure()
-shap.summary_plot(
-    shap_values, shap_sample,
-    max_display=30,
-    show=False
-)
-plt.title('SHAP Feature Importance — Top 30 Features', fontsize=14)
-plt.tight_layout()
-plt.savefig(os.path.join(REPORTS_DIR, 'shap_summary.png'), dpi=150, bbox_inches='tight')
-plt.close()
-print(f"Saved: {os.path.join(REPORTS_DIR, 'shap_summary.png')}")
+    roc_auc = roc_auc_score(target_test, predicted_probabilities)
+    print(f"\nROC-AUC: {roc_auc:.4f}")
+    print("\nClassification Report:")
+    print(classification_report(target_test, predicted_labels, target_names=['Repays', 'Defaults']))
+    report_dict = classification_report(
+        target_test, predicted_labels,
+        target_names=['Repays', 'Defaults'],
+        output_dict=True,
+    )
 
-# SHAP bar plot (mean absolute value)
-plt.figure()
-shap.summary_plot(
-    shap_values, shap_sample,
-    plot_type='bar',
-    max_display=30,
-    show=False
-)
-plt.title('SHAP Mean Absolute Feature Importance — Top 30 Features', fontsize=14)
-plt.tight_layout()
-plt.savefig(os.path.join(REPORTS_DIR, 'shap_bar.png'), dpi=150, bbox_inches='tight')
-plt.close()
-print(f"Saved: {os.path.join(REPORTS_DIR, 'shap_bar.png')}")
+    mlflow.log_metrics({
+        "roc_auc":             roc_auc,
+        "precision_defaults":  report_dict['Defaults']['precision'],
+        "recall_defaults":     report_dict['Defaults']['recall'],
+        "f1_defaults":         report_dict['Defaults']['f1-score'],
+        "precision_repays":    report_dict['Repays']['precision'],
+        "recall_repays":       report_dict['Repays']['recall'],
+        "f1_repays":           report_dict['Repays']['f1-score'],
+        "weighted_avg_f1":     report_dict['weighted avg']['f1-score'],
+    })
 
-# SHAP second pruning candidates
-mean_absolute_shap = pd.Series(
-    np.abs(shap_values).mean(axis=0),
-    index=shap_sample.columns
-).sort_values(ascending=False)
+    # ROC curve
+    fig, ax = plt.subplots(figsize=(8, 6))
+    RocCurveDisplay.from_predictions(target_test, predicted_probabilities, ax=ax)
+    ax.set_title(f'ROC Curve (AUC = {roc_auc:.4f})', fontsize=14)
+    ax.plot([0, 1], [0, 1], 'k--', label='Random classifier')
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(REPORTS_DIR, 'roc_curve.png'), dpi=150)
+    plt.close()
+    print(f"Saved: {os.path.join(REPORTS_DIR, 'roc_curve.png')}")
 
-shap_pruning_candidates = mean_absolute_shap[mean_absolute_shap < 0.001]
-print(f"\nSHAP second pruning candidates ({len(shap_pruning_candidates)} features with mean |SHAP| < 0.001):")
-print(shap_pruning_candidates.to_string())
+    # Confusion matrix
+    confusion_mat = confusion_matrix(target_test, predicted_labels)
+    fig, ax = plt.subplots(figsize=(6, 5))
+    sns.heatmap(
+        confusion_mat, annot=True, fmt='d', cmap='Blues', ax=ax,
+        xticklabels=['Repays', 'Defaults'],
+        yticklabels=['Repays', 'Defaults']
+    )
+    ax.set_xlabel('Predicted', fontsize=12)
+    ax.set_ylabel('Actual', fontsize=12)
+    ax.set_title('Confusion Matrix', fontsize=14)
+    plt.tight_layout()
+    plt.savefig(os.path.join(REPORTS_DIR, 'confusion_matrix.png'), dpi=150)
+    plt.close()
+    print(f"Saved: {os.path.join(REPORTS_DIR, 'confusion_matrix.png')}")
+
+    # Performance interpretation
+    if roc_auc >= 0.80:
+        print("Strong result — above 0.80 AUC. Check for data leakage before considering this final.")
+    elif roc_auc >= 0.77:
+        print("Good result — in the expected range for this dataset with supplementary features.")
+    elif roc_auc >= 0.74:
+        print("Moderate result — in the expected range for application_train features only. Check that supplementary table features are present.")
+    else:
+        print("Below expected range — investigate aggregation bugs, dropped features, or imputation issues.")
 
 
-# ── Step 13: Final summary ────────────────────────────────────────────────────
+    # ── Step 12: SHAP feature importance ──────────────────────────────────────────
 
-print()
-print("========================================")
-print("PIPELINE SUMMARY")
-print("========================================")
-print(f"Dataset shape after joins and drops : {loan_applications_df.shape[0]} x {features_train.shape[1] + 1}")
-print(f"Train size                          : {features_train.shape[0]}")
-print(f"Test size                           : {features_test.shape[0]}")
-print(f"scale_pos_weight                    : {scale_pos_weight:.4f}")
-print(f"Best XGBoost iteration              : {xgb_model.best_iteration}")
-print(f"ROC-AUC (test set)                  : {roc_auc:.4f}")
-print(f"Features with mean |SHAP| < 0.001   : {len(shap_pruning_candidates)} (see second pruning candidates above)")
-print(f"Reports saved to                    : pipeline/reports/")
-print("========================================")
+    print("Computing SHAP values...")
+    shap_sample = features_test.sample(n=min(2000, len(features_test)), random_state=42)
+
+    shap_explainer = shap.TreeExplainer(xgb_model)
+    shap_values = shap_explainer.shap_values(shap_sample)
+
+    # SHAP summary plot (beeswarm)
+    plt.figure()
+    shap.summary_plot(
+        shap_values, shap_sample,
+        max_display=30,
+        show=False
+    )
+    plt.title('SHAP Feature Importance — Top 30 Features', fontsize=14)
+    plt.tight_layout()
+    plt.savefig(os.path.join(REPORTS_DIR, 'shap_summary.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Saved: {os.path.join(REPORTS_DIR, 'shap_summary.png')}")
+
+    # SHAP bar plot (mean absolute value)
+    plt.figure()
+    shap.summary_plot(
+        shap_values, shap_sample,
+        plot_type='bar',
+        max_display=30,
+        show=False
+    )
+    plt.title('SHAP Mean Absolute Feature Importance — Top 30 Features', fontsize=14)
+    plt.tight_layout()
+    plt.savefig(os.path.join(REPORTS_DIR, 'shap_bar.png'), dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"Saved: {os.path.join(REPORTS_DIR, 'shap_bar.png')}")
+
+    # SHAP second pruning candidates
+    mean_absolute_shap = pd.Series(
+        np.abs(shap_values).mean(axis=0),
+        index=shap_sample.columns
+    ).sort_values(ascending=False)
+
+    shap_pruning_candidates = mean_absolute_shap[mean_absolute_shap < 0.001]
+    print(f"\nSHAP second pruning candidates ({len(shap_pruning_candidates)} features with mean |SHAP| < 0.001):")
+    print(shap_pruning_candidates.to_string())
+
+    # Log plot artifacts
+    mlflow.log_artifact(os.path.join(REPORTS_DIR, 'roc_curve.png'))
+    mlflow.log_artifact(os.path.join(REPORTS_DIR, 'confusion_matrix.png'))
+    mlflow.log_artifact(os.path.join(REPORTS_DIR, 'shap_summary.png'))
+    mlflow.log_artifact(os.path.join(REPORTS_DIR, 'shap_bar.png'))
+
+    # Log and register the model
+    mlflow.xgboost.log_model(xgb_model, "model")
+    mlflow.register_model(
+        f"runs:/{mlflow.active_run().info.run_id}/model",
+        "home-credit-default-classifier",
+    )
 
 
-# ── Leakage checklist ─────────────────────────────────────────────────────────
+    # ── Step 13: Final summary ────────────────────────────────────────────────────
 
-print("\nLeakage checklist:")
-print(f"  Imputer fitted on {len(median_imputer.statistics_)} features (expected {features_train.shape[1]}): {'PASS' if len(median_imputer.statistics_) == features_train.shape[1] else 'FAIL'}")
-print(f"  scale_pos_weight computed from training set only: PASS (see class counts above)")
-print(f"  xgb_model.fit received features_train/target_train only: PASS (verify in code above)")
+    print()
+    print("========================================")
+    print("PIPELINE SUMMARY")
+    print("========================================")
+    print(f"Dataset shape after joins and drops : {loan_applications_df.shape[0]} x {features_train.shape[1] + 1}")
+    print(f"Train size                          : {features_train.shape[0]}")
+    print(f"Test size                           : {features_test.shape[0]}")
+    print(f"scale_pos_weight                    : {scale_pos_weight:.4f}")
+    print(f"Best XGBoost iteration              : {xgb_model.best_iteration}")
+    print(f"ROC-AUC (test set)                  : {roc_auc:.4f}")
+    print(f"Features with mean |SHAP| < 0.001   : {len(shap_pruning_candidates)} (see second pruning candidates above)")
+    print("Reports saved to                    : initial_training/reports/")
+    print("========================================")
+
+
+    # ── Leakage checklist ─────────────────────────────────────────────────────────
+
+    print("\nLeakage checklist:")
+    print(f"  Imputer fitted on {len(median_imputer.statistics_)} features (expected {features_train.shape[1]}): {'PASS' if len(median_imputer.statistics_) == features_train.shape[1] else 'FAIL'}")
+    print("  scale_pos_weight computed from training set only: PASS (see class counts above)")
+    print("  xgb_model.fit received features_train/target_train only: PASS (verify in code above)")

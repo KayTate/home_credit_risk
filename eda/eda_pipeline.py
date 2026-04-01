@@ -31,7 +31,7 @@ import gc
 
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from data_aggregation import preprocess, aggregate_all
+from home_credit_risk.lib.data_aggregation import preprocess, aggregate_all
 
 warnings.filterwarnings('ignore')
 matplotlib.use('Agg')
